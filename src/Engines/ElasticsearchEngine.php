@@ -17,11 +17,9 @@ class ElasticsearchEngine extends Engine
     protected $elasticsearch;
 
     /**
-     * The index name.
-     *
      * @var string
      */
-    protected $index;
+    protected $type = 'doc';
 
     /**
      * Create a new engine instance.
@@ -29,11 +27,9 @@ class ElasticsearchEngine extends Engine
      * @param  \Elasticsearch\Client  $elasticsearch
      * @return void
      */
-    public function __construct(Elasticsearch $elasticsearch, $index)
+    public function __construct(Elasticsearch $elasticsearch)
     {
         $this->elasticsearch = $elasticsearch;
-
-        $this->index = $index;
     }
 
     /**
@@ -55,8 +51,8 @@ class ElasticsearchEngine extends Engine
 
             $body->push([
                 'index' => [
-                    '_index' => $this->index,
-                    '_type' => $model->searchableAs(),
+                    '_index' => $model->searchableAs(),
+                    '_type' => $this->type,
                     '_id' => $model->getKey(),
                 ],
             ]);
@@ -83,8 +79,8 @@ class ElasticsearchEngine extends Engine
         $models->each(function ($model) use ($body) {
             $body->push([
                 'delete' => [
-                    '_index' => $this->index,
-                    '_type' => $model->searchableAs(),
+                    '_index' => $model->searchableAs(),
+                    '_type' => $this->type,
                     '_id'  => $model->getKey(),
                 ],
             ]);
@@ -140,40 +136,52 @@ class ElasticsearchEngine extends Engine
      */
     protected function performSearch(Builder $query, array $options = [])
     {
-        $searchQuery = [];
+        $termFilters = [];
+
+        $matchQueries[] = [
+            'match' => [
+                '_all' => [
+                    'query' => $query->query,
+                    'fuzziness' => 1
+                ]
+            ]
+        ];
 
         if (array_key_exists('filters', $options) && $options['filters']) {
             foreach ($options['filters'] as $field => $value) {
-                $searchQuery[] = [
-                    'match' => [
-                        $field => $value,
-                    ],
-                ];
+
+                if(is_numeric($value)) {
+                    $termFilters[] = [
+                        'term' => [
+                            $field => $value,
+                        ],
+                    ];
+                } elseif(is_string($value)) {
+                    $matchQueries[] = [
+                        'match' => [
+                            $field => [
+                                'query' => $value,
+                                'operator' => 'and'
+                            ]
+                        ]
+                    ];
+                }
+
             }
         }
 
-        if ($searchQuery) {
-            $searchQuery = [
-                'bool' => [
-                    'must' => $searchQuery,
-                ],
-            ];
-        }
-
         $searchQuery = [
-            'index' =>  $this->index,
-            'type'  =>  $query->model->searchableAs(),
+            'index' =>  $query->model->searchableAs(),
+            'type'  =>  $this->type,
             'body' => [
                 'query' => [
                     'filtered' => [
-                        'filter' => [
-                            'query' => [
-                                'simple_query_string' => [
-                                    'query' => $query->query,
-                                ],
-                            ],
+                        'filter' => $termFilters,
+                        'query' => [
+                            'bool' => [
+                                'must' => $matchQueries
+                            ]
                         ],
-                        'query' => $searchQuery,
                     ],
                 ],
             ],
